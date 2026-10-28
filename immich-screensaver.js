@@ -1,61 +1,51 @@
 (function () {
     'use strict';
 
-    // Уникальное имя для защиты от повторной загрузки
-    if (window.immichSettingsV1Loaded) return;
-    window.immichSettingsV1Loaded = true;
+    if (window.immichV2Loaded) return;
+    window.immichV2Loaded = true;
 
     function init() {
-        console.log('[Immich] Инициализация настроек (v1)');
+        console.log('[Immich v2] init');
 
         try {
-            // 1. Регистрируем раздел
             Lampa.SettingsApi.addComponent({
-                component: 'immich_settings_v1', // Новое уникальное имя
-                name: 'Immich (Настройки)',
+                component: 'immich_v2',
+                name: 'Immich v2',
                 icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/></svg>'
             });
 
-            // 2. Поле для URL
             Lampa.SettingsApi.addParam({
-                component: 'immich_settings_v1',
+                component: 'immich_v2',
                 param: {
-                    name: 'immich_url',
+                    name: 'immich_v2_url',
                     type: 'input',
-                    default: '',
-                    placeholder: 'https://immich.example.com'
+                    default: ''
                 },
                 field: {
-                    name: 'Immich URL',
-                    description: 'Базовый адрес вашего сервера Immich'
+                    name: 'Immich URL'
                 }
             });
 
-            // 3. Поле для API-ключа
             Lampa.SettingsApi.addParam({
-                component: 'immich_settings_v1',
+                component: 'immich_v2',
                 param: {
-                    name: 'immich_api_key',
+                    name: 'immich_v2_key',
                     type: 'input',
-                    default: '',
-                    placeholder: 'Ваш API-ключ'
+                    default: ''
                 },
                 field: {
-                    name: 'API Key',
-                    description: 'Ключ для доступа к API Immich'
+                    name: 'API Key'
                 }
             });
 
-            console.log('[Immich] Поля настроек успешно добавлены.');
-            Lampa.Noty.show('Immich: настройки (v1) загружены');
+            console.log('[Immich v2] Параметры добавлены успешно');
+            Lampa.Noty.show('Immich v2: готово');
 
         } catch (e) {
-            console.error('[Immich] Критическая ошибка при добавлении настроек:', e);
-            Lampa.Noty.show('Immich: ошибка в консоли');
+            console.error('[Immich v2] Ошибка в init:', e);
         }
     }
 
-    // Запуск после готовности приложения
     if (window.appready) {
         init();
     } else {
