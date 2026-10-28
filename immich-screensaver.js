@@ -1,109 +1,119 @@
 /*
  * Immich Screensaver for Lampa
- * Version: 1.1.4
+ * Version: 1.2.1  (автоподбор эндпоинта, требует CORS на NPM)
  */
 (function () {
     'use strict';
 
-    var VERSION = '1.1.4';
+    var VERSION = '1.2.1';
 
     if (window.immichScreensaverLoaded) return;
     window.immichScreensaverLoaded = true;
 
     // ---------- УТИЛИТЫ ----------
-    function getUrl() {
-        return (Lampa.Storage.get('immich_url', '') || '').replace(/\/+$/, '');
-    }
-    function getKey() {
-        return Lampa.Storage.get('immich_api_key', '') || '';
-    }
-    function notify(msg) {
-        try { Lampa.Noty.show(msg); } catch (e) { console.log('[Immich]', msg); }
-    }
+    function getUrl() { return (Lampa.Storage.get('immich_url', '') || '').replace(/\/+$/, ''); }
+    function getKey() { return Lampa.Storage.get('immich_api_key', '') || ''; }
+    function notify(msg) { try { Lampa.Noty.show(msg); } catch (e) { console.log('[Immich]', msg); } }
     function escapeHtml(s) {
         return String(s == null ? '' : s)
             .replace(/&/g, '&amp;').replace(/</g, '&lt;')
             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    // ---------- ЗАПРОС СПИСКА ФОТО ЧЕРЕЗ CORSPROXY.IO С ПЕРЕДАЧЕЙ КЛЮЧА ----------
+    // ---------- СПИСОК ФОТО: ПЕРЕБОР ЭНДПОИНТОВ ----------
     function fetchAssets(url, key) {
-        var target = url + '/api/assets/random?count=10';
-        // Формируем URL для corsproxy.io с переопределением заголовка x-api-key
-        var proxyUrl = 'https://corsproxy.io/?url=' + encodeURIComponent(target) +
-                       '&reqHeaders=' + encodeURIComponent('x-api-key:' + key);
+        var candidates = [
+            {
+                desc: 'POST /api/search/random',
+                method: 'POST',
+                path: '/api/search/random',
+                body: { size: 10 }
+            },
+            {
+                desc: 'GET /api/asset/random',
+                method: 'GET',
+                path: '/api/asset/random?count=10',
+                body: null
+            },
+            {
+                desc: 'GET /api/assets/random (старый)',
+                method: 'GET',
+                path: '/api/assets/random?count=10',
+                body: null
+            }
+        ];
 
-        console.log('[Immich][list] proxy url:', proxyUrl);
+        function tryNext(i) {
+            if (i >= candidates.length) {
+                return Promise.reject(new Error('Ни один эндпоинт не сработал. Проверьте версию Immich.'));
+            }
+            var c = candidates[i];
+            var opts = {
+                method: c.method,
+                headers: { 'x-api-key': key, 'Accept': 'application/json' },
+                mode: 'cors',
+                credentials: 'omit'
+            };
+            if (c.body) {
+                opts.headers['Content-Type'] = 'application/json';
+                opts.body = JSON.stringify(c.body);
+            }
+            var fullUrl = url + c.path;
+            console.log('[Immich][list] try:', c.desc, fullUrl);
 
-        return fetch(proxyUrl, { credentials: 'omit' })
-            .then(function (r) {
-                console.log('[Immich][list] status:', r.status);
-                if (!r.ok) throw new Error('Proxy HTTP ' + r.status);
+            return fetch(fullUrl, opts).then(function (r) {
+                console.log('[Immich][list]', c.desc, 'status:', r.status);
+                if (r.status === 400 || r.status === 404 || r.status === 405) {
+                    // Эндпоинт не тот — пробуем следующий
+                    return tryNext(i + 1);
+                }
+                if (!r.ok) {
+                    return r.text().then(function (t) {
+                        throw new Error('HTTP ' + r.status + ' — ' + (t || '').slice(0, 120));
+                    });
+                }
                 return r.json();
+            }).then(null, function (e) {
+                if (e && /HTTP (400|404|405)/.test(e.message || '')) {
+                    return tryNext(i + 1);
+                }
+                throw e;
             });
+        }
+
+        return Promise.resolve().then(function () { return tryNext(0); });
     }
 
-    // ---------- ЗАГРУЗКА ОДНОГО ПРЕВЬЮ ----------
+    // ---------- ПРЕВЬЮ: ПЕРЕБОР ЭНДПОИНТОВ ----------
     function loadThumbnail(baseUrl, id, key) {
-        // Способ 1: прямой URL с ключом в query-параметре (apiKey) — работает через <img>
-        var directUrl = baseUrl + '/api/assets/' + id + '/thumbnail?size=preview&apiKey=' + encodeURIComponent(key);
-        console.log('[Immich][thumb] try direct (apiKey in query):', directUrl);
+        var candidates = [
+            baseUrl + '/api/assets/' + id + '/thumbnail?size=preview',
+            baseUrl + '/api/asset/thumbnail/' + id + '?size=preview'
+        ];
 
-        return new Promise(function (resolve) {
-            var img = new Image();
-            var done = false;
-
-            // Таймаут на случай, если Immich не поддерживает apiKey в query
-            var timer = setTimeout(function () {
-                if (done) return;
-                done = true;
-                console.warn('[Immich][thumb] direct (apiKey) timeout, fallback to proxy');
-                viaProxy();
-            }, 8000);
-
-            img.onload = function () {
-                if (done) return;
-                done = true;
-                clearTimeout(timer);
-                console.log('[Immich][thumb] direct (apiKey) OK');
-                resolve(directUrl);
-            };
-            img.onerror = function () {
-                if (done) return;
-                done = true;
-                clearTimeout(timer);
-                console.warn('[Immich][thumb] direct (apiKey) failed, fallback to proxy');
-                viaProxy();
-            };
-            img.src = directUrl;
-
-            // Способ 2: через corsproxy.io с заголовком x-api-key
-            function viaProxy() {
-                var target = baseUrl + '/api/assets/' + id + '/thumbnail?size=preview';
-                var proxyUrl = 'https://corsproxy.io/?url=' + encodeURIComponent(target) +
-                               '&reqHeaders=' + encodeURIComponent('x-api-key:' + key);
-                console.log('[Immich][thumb] proxy url:', proxyUrl);
-
-                fetch(proxyUrl, { credentials: 'omit' })
-                    .then(function (r) {
-                        if (!r.ok) throw new Error('Proxy HTTP ' + r.status);
-                        return r.blob();
-                    })
-                    .then(function (blob) {
-                        try {
-                            var objectUrl = URL.createObjectURL(blob);
-                            console.log('[Immich][thumb] proxy OK');
-                            resolve(objectUrl);
-                        } catch (e) {
-                            resolve(null);
-                        }
-                    })
-                    .then(null, function (e) {
-                        console.warn('[Immich][thumb] proxy failed:', e && e.message);
-                        resolve(null);
-                    });
+        function tryNext(i) {
+            if (i >= candidates.length) {
+                console.warn('[Immich][thumb]', id, 'все эндпоинты не сработали');
+                return Promise.resolve(null);
             }
-        });
+            var endpoint = candidates[i];
+            return fetch(endpoint, {
+                method: 'GET',
+                headers: { 'x-api-key': key },
+                mode: 'cors',
+                credentials: 'omit'
+            }).then(function (r) {
+                if (!r.ok) throw new Error('thumb HTTP ' + r.status);
+                return r.blob();
+            }).then(function (blob) {
+                return URL.createObjectURL(blob);
+            }).then(null, function (e) {
+                console.warn('[Immich][thumb]', id, 'attempt', i, 'failed:', e && e.message);
+                return tryNext(i + 1);
+            });
+        }
+
+        return Promise.resolve().then(function () { return tryNext(0); });
     }
 
     // ---------- ВВОД ТЕКСТА ----------
@@ -124,23 +134,14 @@
         $('body').append(html);
         var $input = $('.immich-direct-field');
 
-        function doSave() {
-            var v = $input.val();
-            $('.immich-input-modal').remove();
-            onDone(v);
-        }
-        function doCancel() {
-            $('.immich-input-modal').remove();
-        }
+        function doSave() { var v = $input.val(); $('.immich-input-modal').remove(); onDone(v); }
+        function doCancel() { $('.immich-input-modal').remove(); }
 
         [50, 200, 500, 1000, 2000].forEach(function (d) {
             setTimeout(function () {
                 if ($input.length && $input.is(':visible')) {
                     try { $input[0].focus(); } catch (e) {}
-                    try {
-                        var len = $input.val().length;
-                        $input[0].setSelectionRange(len, len);
-                    } catch (e) {}
+                    try { var len = $input.val().length; $input[0].setSelectionRange(len, len); } catch (e) {}
                 }
             }, d);
         });
@@ -172,7 +173,7 @@
                         '</div>' +
                     '</div>' +
                     '<div class="immich-settings-row">' +
-                        '<label>API-ключ</label>' +
+                        '<label>API-ключ Immich</label>' +
                         '<div class="immich-value-btn" id="immich-row-key">' +
                             '<span class="immich-value-text" id="immich-value-key">—</span>' +
                             '<span class="immich-value-edit">Изменить</span>' +
@@ -182,7 +183,7 @@
                         '<div class="immich-btn immich-btn-primary" id="immich-btn-start">Запустить показ</div>' +
                         '<div class="immich-btn" id="immich-btn-close">Закрыть</div>' +
                     '</div>' +
-                    '<div class="immich-settings-hint">Запросы идут через corsproxy.io с передачей заголовка x-api-key. API-ключ будет виден прокси.</div>' +
+                    '<div class="immich-settings-hint">Эндпоинт подбирается автоматически. Нужен CORS на NPM.</div>' +
                 '</div>' +
             '</div>';
         $('body').append(html);
@@ -194,9 +195,7 @@
         }
         refresh();
 
-        function close() {
-            $('.immich-settings-overlay:not(.immich-input-modal)').remove();
-        }
+        function close() { $('.immich-settings-overlay:not(.immich-input-modal)').remove(); }
 
         $('#immich-row-url').on('hover:enter click', function () {
             editTextDirect('URL сервера Immich', getUrl(), function (v) {
@@ -211,10 +210,7 @@
             });
         });
         $('#immich-btn-close').on('click hover:enter', close);
-        $('#immich-btn-start').on('click hover:enter', function () {
-            close();
-            startSlideshow();
-        });
+        $('#immich-btn-start').on('click hover:enter', function () { close(); startSlideshow(); });
     }
 
     // ---------- СЛАЙДШОУ ----------
@@ -229,36 +225,41 @@
         notify('Immich: запрос списка фото...');
 
         fetchAssets(url, key)
-            .then(function (data) {
-                var assets = Array.isArray(data) ? data
-                    : (data && (data.assets || data.items || data.results)) || [];
-                console.log('[Immich] assets count:', assets.length);
-                if (!assets.length) { notify('Immich: пустой список'); return; }
+        .then(function (data) {
+            var assets = Array.isArray(data) ? data
+                : (data && (data.assets || data.items || data.results)) || [];
+            console.log('[Immich] assets count:', assets.length);
+            if (!assets.length) { notify('Immich: пустой список'); return; }
 
-                var loads = assets.map(function (a) {
-                    var id = a.id || a.assetId;
-                    if (!id) return Promise.resolve(null);
-                    return loadThumbnail(url, id, key);
-                });
-
-                return Promise.all(loads).then(function (urls) {
-                    var valid = urls.filter(function (u) { return !!u; });
-                    console.log('[Immich] valid thumbs:', valid.length);
-                    if (!valid.length) { notify('Immich: превью не загрузились'); return; }
-                    showSlideshow(valid);
-                });
-            })
-            .then(null, function (err) {
-                var msg = err && err.message ? err.message : String(err);
-                console.error('[Immich] error:', msg);
-                notify('Immich: ' + msg);
+            var loads = assets.map(function (a) {
+                var id = a.id || a.assetId;
+                if (!id) return Promise.resolve(null);
+                return loadThumbnail(url, id, key);
             });
+
+            return Promise.all(loads).then(function (urls) {
+                var valid = urls.filter(function (u) { return !!u; });
+                console.log('[Immich] valid thumbs:', valid.length);
+                if (!valid.length) {
+                    notify('Immich: превью не загрузились. Проверьте CORS и версию Immich.');
+                    return;
+                }
+                showSlideshow(valid);
+            });
+        })
+        .then(null, function (err) {
+            var msg = err && err.message ? err.message : String(err);
+            console.error('[Immich] error:', msg);
+            if (/Failed to fetch/i.test(msg)) {
+                notify('Immich: CORS блокирует запрос. Настройте NPM.');
+            } else {
+                notify('Immich: ' + msg);
+            }
+        });
     }
 
     function showSlideshow(urls) {
-        st.urls = urls;
-        st.index = 0;
-        st.active = true;
+        st.urls = urls; st.index = 0; st.active = true;
         var overlay = $(
             '<div class="immich-slideshow-overlay">' +
                 '<div class="immich-slide" id="immich-slide"></div>' +
@@ -298,11 +299,7 @@
         if (st.timer) { clearTimeout(st.timer); st.timer = null; }
         $(document).off('keydown.immich', onSlideKey);
         if (st.overlay) { st.overlay.remove(); st.overlay = null; }
-        st.urls.forEach(function (u) {
-            try {
-                if (u && u.indexOf('blob:') === 0) URL.revokeObjectURL(u);
-            } catch (e) {}
-        });
+        st.urls.forEach(function (u) { try { if (u && u.indexOf('blob:') === 0) URL.revokeObjectURL(u); } catch (e) {} });
         st.urls = [];
         notify('Immich: показ остановлен');
     }
@@ -333,10 +330,7 @@
             return;
         }
         var tries = 0;
-        var iv = setInterval(function () {
-            tries++;
-            if (addMenuItem() || tries > 40) clearInterval(iv);
-        }, 500);
+        var iv = setInterval(function () { tries++; if (addMenuItem() || tries > 40) clearInterval(iv); }, 500);
     }
 
     // ---------- СТИЛИ ----------
