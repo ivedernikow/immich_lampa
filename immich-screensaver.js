@@ -1,35 +1,14 @@
 /*
  * Immich Screensaver for Lampa
- * Version: 1.1.3
+ * Version: 1.1.4
  */
 (function () {
     'use strict';
 
-    var VERSION = '1.1.3';
+    var VERSION = '1.1.4';
 
     if (window.immichScreensaverLoaded) return;
     window.immichScreensaverLoaded = true;
-
-    var PROXIES = [
-        {
-            name: 'corsproxy.io',
-            build: function (url) {
-                return 'https://corsproxy.io/?url=' + encodeURIComponent(url);
-            }
-        },
-        {
-            name: 'allorigins.win',
-            build: function (url) {
-                return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
-            }
-        },
-        {
-            name: 'cors-anywhere',
-            build: function (url) {
-                return 'https://cors-anywhere.herokuapp.com/' + url;
-            }
-        }
-    ];
 
     // ---------- УТИЛИТЫ ----------
     function getUrl() {
@@ -47,61 +26,38 @@
             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    // ---------- ЗАПРОСЫ С ОБХОДОМ CORS ----------
-    function requestJson(url, headers, tag) {
-        console.log('[Immich][' + tag + '] direct attempt:', url);
-        return fetch(url, { headers: headers, credentials: 'omit' })
-            .then(function (r) {
-                console.log('[Immich][' + tag + '] direct status:', r.status);
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            })
-            .then(null, function (e) {
-                console.warn('[Immich][' + tag + '] direct failed:', e && e.message);
-                return tryProxies(url, headers, tag, 0);
-            });
-    }
+    // ---------- ЗАПРОС СПИСКА ФОТО ЧЕРЕЗ CORSPROXY.IO С ПЕРЕДАЧЕЙ КЛЮЧА ----------
+    function fetchAssets(url, key) {
+        var target = url + '/api/assets/random?count=10';
+        // Формируем URL для corsproxy.io с переопределением заголовка x-api-key
+        var proxyUrl = 'https://corsproxy.io/?url=' + encodeURIComponent(target) +
+                       '&reqHeaders=' + encodeURIComponent('x-api-key:' + key);
 
-    function tryProxies(url, headers, tag, index) {
-        if (index >= PROXIES.length) {
-            throw new Error('Все CORS-прокси недоступны');
-        }
-        var proxy = PROXIES[index];
-        var proxyUrl = proxy.build(url);
-        console.log('[Immich][' + tag + '] proxy try:', proxy.name, '->', proxyUrl);
-        return fetch(proxyUrl, { headers: headers, credentials: 'omit' })
+        console.log('[Immich][list] proxy url:', proxyUrl);
+
+        return fetch(proxyUrl, { credentials: 'omit' })
             .then(function (r) {
-                console.log('[Immich][' + tag + '] proxy status:', proxy.name, r.status);
+                console.log('[Immich][list] status:', r.status);
                 if (!r.ok) throw new Error('Proxy HTTP ' + r.status);
-                return r.text();
-            })
-            .then(function (text) {
-                try {
-                    var data = JSON.parse(text);
-                    console.log('[Immich][' + tag + '] proxy OK:', proxy.name);
-                    return data;
-                } catch (e) {
-                    throw new Error('Invalid JSON from ' + proxy.name);
-                }
-            })
-            .then(null, function (e) {
-                console.warn('[Immich][' + tag + '] proxy failed:', proxy.name, '-', e && e.message);
-                return tryProxies(url, headers, tag, index + 1);
+                return r.json();
             });
     }
 
-    // Загрузка одного превью
+    // ---------- ЗАГРУЗКА ОДНОГО ПРЕВЬЮ ----------
     function loadThumbnail(baseUrl, id, key) {
-        // Способ 1: прямой URL с ключом в query (работает через <img> без CORS)
-        var directUrl = baseUrl + '/api/assets/' + id + '/thumbnail?size=preview&key=' + encodeURIComponent(key);
+        // Способ 1: прямой URL с ключом в query-параметре (apiKey) — работает через <img>
+        var directUrl = baseUrl + '/api/assets/' + id + '/thumbnail?size=preview&apiKey=' + encodeURIComponent(key);
+        console.log('[Immich][thumb] try direct (apiKey in query):', directUrl);
+
         return new Promise(function (resolve) {
-            console.log('[Immich][thumb] try direct key url:', directUrl);
             var img = new Image();
             var done = false;
+
+            // Таймаут на случай, если Immich не поддерживает apiKey в query
             var timer = setTimeout(function () {
                 if (done) return;
                 done = true;
-                console.warn('[Immich][thumb] direct timeout, fallback to proxy');
+                console.warn('[Immich][thumb] direct (apiKey) timeout, fallback to proxy');
                 viaProxy();
             }, 8000);
 
@@ -109,23 +65,26 @@
                 if (done) return;
                 done = true;
                 clearTimeout(timer);
-                console.log('[Immich][thumb] direct OK');
+                console.log('[Immich][thumb] direct (apiKey) OK');
                 resolve(directUrl);
             };
             img.onerror = function () {
                 if (done) return;
                 done = true;
                 clearTimeout(timer);
-                console.warn('[Immich][thumb] direct failed, fallback to proxy');
+                console.warn('[Immich][thumb] direct (apiKey) failed, fallback to proxy');
                 viaProxy();
             };
             img.src = directUrl;
 
+            // Способ 2: через corsproxy.io с заголовком x-api-key
             function viaProxy() {
                 var target = baseUrl + '/api/assets/' + id + '/thumbnail?size=preview';
-                var pUrl = PROXIES[0].build(target);
-                console.log('[Immich][thumb] proxy url:', pUrl);
-                fetch(pUrl, { headers: { 'x-api-key': key }, credentials: 'omit' })
+                var proxyUrl = 'https://corsproxy.io/?url=' + encodeURIComponent(target) +
+                               '&reqHeaders=' + encodeURIComponent('x-api-key:' + key);
+                console.log('[Immich][thumb] proxy url:', proxyUrl);
+
+                fetch(proxyUrl, { credentials: 'omit' })
                     .then(function (r) {
                         if (!r.ok) throw new Error('Proxy HTTP ' + r.status);
                         return r.blob();
@@ -223,7 +182,7 @@
                         '<div class="immich-btn immich-btn-primary" id="immich-btn-start">Запустить показ</div>' +
                         '<div class="immich-btn" id="immich-btn-close">Закрыть</div>' +
                     '</div>' +
-                    '<div class="immich-settings-hint">Запросы будут проходить через публичные CORS-прокси. API-ключ может быть виден прокси.</div>' +
+                    '<div class="immich-settings-hint">Запросы идут через corsproxy.io с передачей заголовка x-api-key. API-ключ будет виден прокси.</div>' +
                 '</div>' +
             '</div>';
         $('body').append(html);
@@ -267,11 +226,9 @@
         if (!url) { notify('Immich: URL не задан'); openSettings(); return; }
         if (!key) { notify('Immich: API-ключ не задан'); openSettings(); return; }
 
-        var endpoint = url + '/api/assets/random?count=10';
-        var headers = { 'x-api-key': key, 'Accept': 'application/json' };
         notify('Immich: запрос списка фото...');
 
-        requestJson(endpoint, headers, 'list')
+        fetchAssets(url, key)
             .then(function (data) {
                 var assets = Array.isArray(data) ? data
                     : (data && (data.assets || data.items || data.results)) || [];
