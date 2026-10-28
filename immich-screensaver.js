@@ -1,84 +1,61 @@
 (function () {
     'use strict';
 
-    // Защита от повторной загрузки плагина
-    if (window.immichScreensaverLoaded) return;
-    window.immichScreensaverLoaded = true;
+    // Уникальное имя для защиты от повторной загрузки
+    if (window.immichSettingsV1Loaded) return;
+    window.immichSettingsV1Loaded = true;
 
     function init() {
-        console.log('[Immich] init');
+        console.log('[Immich] Инициализация настроек (v1)');
 
-        // 1. Регистрируем раздел в настройках
-        Lampa.SettingsApi.addComponent({
-            component: 'immich_screensaver',
-            name: 'Immich',
-            icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/></svg>'
-        });
+        try {
+            // 1. Регистрируем раздел
+            Lampa.SettingsApi.addComponent({
+                component: 'immich_settings_v1', // Новое уникальное имя
+                name: 'Immich (Настройки)',
+                icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/></svg>'
+            });
 
-        // 2. Добавляем поле для URL сервера Immich
-        Lampa.SettingsApi.addParam({
-            component: 'immich_screensaver',
-            param: {
-                name: 'immich_url',
-                type: 'input',
-                default: '',
-                placeholder: 'https://immich.example.com'
-            },
-            field: {
-                name: 'Immich URL',
-                description: 'Базовый адрес вашего сервера Immich'
-            }
-        });
-
-        // 3. Добавляем поле для API-ключа
-        Lampa.SettingsApi.addParam({
-            component: 'immich_screensaver',
-            param: {
-                name: 'immich_api_key',
-                type: 'input',
-                default: '',
-                placeholder: 'Ваш API-ключ'
-            },
-            field: {
-                name: 'API Key',
-                description: 'Ключ для доступа к API Immich'
-            }
-        });
-
-        // 4. Добавляем кнопку ручного запуска
-        Lampa.SettingsApi.addParam({
-            component: 'immich_screensaver',
-            param: {
-                name: 'immich_start_now',
-                type: 'trigger',
-                default: false
-            },
-            field: {
-                name: 'Запустить показ сейчас'
-            },
-            onChange: function () {
-                // Сбрасываем триггер, чтобы кнопку можно было нажать снова
-                Lampa.Storage.set('immich_start_now', false);
-                
-                // Читаем настройки
-                var url = Lampa.Storage.field('immich_url');
-                var apiKey = Lampa.Storage.field('immich_api_key');
-
-                if (!url || !apiKey) {
-                    Lampa.Noty.show('Immich: сначала заполните URL и API-ключ');
-                    return;
+            // 2. Поле для URL
+            Lampa.SettingsApi.addParam({
+                component: 'immich_settings_v1',
+                param: {
+                    name: 'immich_url',
+                    type: 'input',
+                    default: '',
+                    placeholder: 'https://immich.example.com'
+                },
+                field: {
+                    name: 'Immich URL',
+                    description: 'Базовый адрес вашего сервера Immich'
                 }
+            });
 
-                console.log('[Immich] Ручной запуск. URL:', url);
-                Lampa.Noty.show('Immich: запуск (пока заглушка)');
-                // Здесь позже будет вызов функции показа слайдшоу
-            }
-        });
+            // 3. Поле для API-ключа
+            Lampa.SettingsApi.addParam({
+                component: 'immich_settings_v1',
+                param: {
+                    name: 'immich_api_key',
+                    type: 'input',
+                    default: '',
+                    placeholder: 'Ваш API-ключ'
+                },
+                field: {
+                    name: 'API Key',
+                    description: 'Ключ для доступа к API Immich'
+                }
+            });
 
-        Lampa.Noty.show('Immich: настройки загружены');
+            console.log('[Immich] Поля настроек успешно добавлены.');
+            Lampa.Noty.show('Immich: настройки (v1) загружены');
+
+        } catch (e) {
+            console.error('[Immich] Критическая ошибка при добавлении настроек:', e);
+            Lampa.Noty.show('Immich: ошибка в консоли');
+        }
     }
 
-    // Запускаем init только после полной готовности приложения
+    // Запуск после готовности приложения
     if (window.appready) {
         init();
     } else {
