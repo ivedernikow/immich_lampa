@@ -1,6 +1,6 @@
 /*
  * Immich Screensaver for Lampa
- * Version: 1.2.1  (автоподбор эндпоинта, требует CORS на NPM)
+ * Version: 1.2.1  (Immich 3.x, POST /api/search/random)
  */
 (function () {
     'use strict';
@@ -20,100 +20,50 @@
             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    // ---------- СПИСОК ФОТО: ПЕРЕБОР ЭНДПОИНТОВ ----------
+    // ---------- СПИСОК ФОТО (Immich 3.x) ----------
     function fetchAssets(url, key) {
-        var candidates = [
-            {
-                desc: 'POST /api/search/random',
-                method: 'POST',
-                path: '/api/search/random',
-                body: { size: 10 }
+        var endpoint = url + '/api/search/random';
+        var body = { size: 10 };
+        console.log('[Immich][list] POST', endpoint, 'body:', body);
+
+        return fetch(endpoint, {
+            method: 'POST',
+            headers: {
+                'x-api-key': key,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
             },
-            {
-                desc: 'GET /api/asset/random',
-                method: 'GET',
-                path: '/api/asset/random?count=10',
-                body: null
-            },
-            {
-                desc: 'GET /api/assets/random (старый)',
-                method: 'GET',
-                path: '/api/assets/random?count=10',
-                body: null
+            mode: 'cors',
+            credentials: 'omit',
+            body: JSON.stringify(body)
+        }).then(function (r) {
+            console.log('[Immich][list] status:', r.status, 'type:', r.type);
+            if (!r.ok) {
+                return r.text().then(function (t) {
+                    throw new Error('HTTP ' + r.status + ' — ' + (t || '').slice(0, 200));
+                });
             }
-        ];
-
-        function tryNext(i) {
-            if (i >= candidates.length) {
-                return Promise.reject(new Error('Ни один эндпоинт не сработал. Проверьте версию Immich.'));
-            }
-            var c = candidates[i];
-            var opts = {
-                method: c.method,
-                headers: { 'x-api-key': key, 'Accept': 'application/json' },
-                mode: 'cors',
-                credentials: 'omit'
-            };
-            if (c.body) {
-                opts.headers['Content-Type'] = 'application/json';
-                opts.body = JSON.stringify(c.body);
-            }
-            var fullUrl = url + c.path;
-            console.log('[Immich][list] try:', c.desc, fullUrl);
-
-            return fetch(fullUrl, opts).then(function (r) {
-                console.log('[Immich][list]', c.desc, 'status:', r.status);
-                if (r.status === 400 || r.status === 404 || r.status === 405) {
-                    // Эндпоинт не тот — пробуем следующий
-                    return tryNext(i + 1);
-                }
-                if (!r.ok) {
-                    return r.text().then(function (t) {
-                        throw new Error('HTTP ' + r.status + ' — ' + (t || '').slice(0, 120));
-                    });
-                }
-                return r.json();
-            }).then(null, function (e) {
-                if (e && /HTTP (400|404|405)/.test(e.message || '')) {
-                    return tryNext(i + 1);
-                }
-                throw e;
-            });
-        }
-
-        return Promise.resolve().then(function () { return tryNext(0); });
+            return r.json();
+        });
     }
 
-    // ---------- ПРЕВЬЮ: ПЕРЕБОР ЭНДПОИНТОВ ----------
+    // ---------- ПРЕВЬЮ ----------
     function loadThumbnail(baseUrl, id, key) {
-        var candidates = [
-            baseUrl + '/api/assets/' + id + '/thumbnail?size=preview',
-            baseUrl + '/api/asset/thumbnail/' + id + '?size=preview'
-        ];
-
-        function tryNext(i) {
-            if (i >= candidates.length) {
-                console.warn('[Immich][thumb]', id, 'все эндпоинты не сработали');
-                return Promise.resolve(null);
-            }
-            var endpoint = candidates[i];
-            return fetch(endpoint, {
-                method: 'GET',
-                headers: { 'x-api-key': key },
-                mode: 'cors',
-                credentials: 'omit'
-            }).then(function (r) {
-                if (!r.ok) throw new Error('thumb HTTP ' + r.status);
-                return r.blob();
-            }).then(function (blob) {
-                return URL.createObjectURL(blob);
-            }).then(null, function (e) {
-                console.warn('[Immich][thumb]', id, 'attempt', i, 'failed:', e && e.message);
-                return tryNext(i + 1);
-            });
-        }
-
-        return Promise.resolve().then(function () { return tryNext(0); });
+        var endpoint = baseUrl + '/api/assets/' + id + '/thumbnail?size=preview';
+        return fetch(endpoint, {
+            method: 'GET',
+            headers: { 'x-api-key': key },
+            mode: 'cors',
+            credentials: 'omit'
+        }).then(function (r) {
+            if (!r.ok) throw new Error('thumb HTTP ' + r.status);
+            return r.blob();
+        }).then(function (blob) {
+            return URL.createObjectURL(blob);
+        }).then(null, function (e) {
+            console.warn('[Immich][thumb]', id, 'failed:', e && e.message);
+            return null;
+        });
     }
 
     // ---------- ВВОД ТЕКСТА ----------
@@ -183,7 +133,7 @@
                         '<div class="immich-btn immich-btn-primary" id="immich-btn-start">Запустить показ</div>' +
                         '<div class="immich-btn" id="immich-btn-close">Закрыть</div>' +
                     '</div>' +
-                    '<div class="immich-settings-hint">Эндпоинт подбирается автоматически. Нужен CORS на NPM.</div>' +
+                    '<div class="immich-settings-hint">Для Immich 3.x используется POST /api/search/random. Нужен CORS на NPM.</div>' +
                 '</div>' +
             '</div>';
         $('body').append(html);
@@ -241,7 +191,7 @@
                 var valid = urls.filter(function (u) { return !!u; });
                 console.log('[Immich] valid thumbs:', valid.length);
                 if (!valid.length) {
-                    notify('Immich: превью не загрузились. Проверьте CORS и версию Immich.');
+                    notify('Immich: превью не загрузились. Проверьте CORS.');
                     return;
                 }
                 showSlideshow(valid);
