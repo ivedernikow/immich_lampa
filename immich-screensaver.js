@@ -1,12 +1,11 @@
 /*
  * Immich Screensaver for Lampa
- * Version: 1.0.0
- * Автор: ivedernikow
+ * Version: 1.1.0
  */
 (function () {
     'use strict';
 
-    var VERSION = '1.0.0';
+    var VERSION = '1.1.0';
 
     if (window.immichScreensaverLoaded) return;
     window.immichScreensaverLoaded = true;
@@ -25,67 +24,105 @@
         try { Lampa.Noty.show(msg); } catch (e) { console.log('[Immich]', msg); }
     }
 
-    // ---------- МОДАЛЬНОЕ ОКНО НАСТРОЕК ----------
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // Универсальная обёртка над штатной клавиатурой Lampa
+    function editText(title, currentValue, onDone) {
+        var opts = {
+            title: title,
+            value: currentValue || '',
+            free: true,
+            nosave: true,
+            onSave: function (value) { onDone(value); },
+            onCancel: function () {}
+        };
+        try {
+            var res = Lampa.Input.edit(opts);
+            // В новых версиях Lampa Input.edit возвращает Promise
+            if (res && typeof res.then === 'function') {
+                res.then(function (value) {
+                    if (value !== undefined && value !== null) onDone(value);
+                }).then(null, function () {});
+            }
+        } catch (e) {
+            console.error('[Immich] Input.edit error:', e);
+            notify('Immich: не удалось открыть клавиатуру');
+        }
+    }
+
+    // ---------- ОКНО НАСТРОЕК ----------
 
     function openSettings() {
-        // Если окно уже открыто — не дублируем
         if ($('.immich-settings-overlay').length) return;
-
-        var url = getUrl();
-        var key = getKey();
 
         var html =
             '<div class="immich-settings-overlay">' +
                 '<div class="immich-settings-box">' +
                     '<div class="immich-settings-title">Immich — настройки (v' + VERSION + ')</div>' +
+
                     '<div class="immich-settings-row">' +
                         '<label>URL сервера</label>' +
-                        '<input type="text" class="immich-input" id="immich-input-url" value="' + escapeHtml(url) + '" placeholder="https://immich.example.com">' +
+                        '<div class="immich-value-btn" id="immich-row-url">' +
+                            '<span class="immich-value-text" id="immich-value-url">—</span>' +
+                            '<span class="immich-value-edit">Изменить</span>' +
+                        '</div>' +
                     '</div>' +
+
                     '<div class="immich-settings-row">' +
                         '<label>API-ключ</label>' +
-                        '<input type="text" class="immich-input" id="immich-input-key" value="' + escapeHtml(key) + '" placeholder="Ваш API-ключ">' +
+                        '<div class="immich-value-btn" id="immich-row-key">' +
+                            '<span class="immich-value-text" id="immich-value-key">—</span>' +
+                            '<span class="immich-value-edit">Изменить</span>' +
+                        '</div>' +
                     '</div>' +
+
                     '<div class="immich-settings-buttons">' +
-                        '<div class="immich-btn" id="immich-btn-save">Сохранить</div>' +
                         '<div class="immich-btn immich-btn-primary" id="immich-btn-start">Запустить показ</div>' +
                         '<div class="immich-btn" id="immich-btn-close">Закрыть</div>' +
                     '</div>' +
-                    '<div class="immich-settings-hint">Вводите текст с подключённой клавиатуры. Сохранение — кнопкой «Сохранить».</div>' +
+
+                    '<div class="immich-settings-hint">Нажмите OK на строке, чтобы открыть клавиатуру Lampa.</div>' +
                 '</div>' +
             '</div>';
 
         $('body').append(html);
 
+        function refreshLabels() {
+            var u = getUrl();
+            var k = getKey();
+            $('#immich-value-url').text(u || '— не задан —');
+            $('#immich-value-key').text(k ? ('••••' + k.slice(-4)) : '— не задан —');
+        }
+        refreshLabels();
+
         function close() {
             $('.immich-settings-overlay').remove();
         }
 
-        $('#immich-btn-close').on('click hover:enter', close);
-
-        $('#immich-btn-save').on('click hover:enter', function () {
-            var newUrl = ($('#immich-input-url').val() || '').trim();
-            var newKey = ($('#immich-input-key').val() || '').trim();
-            Lampa.Storage.set('immich_url', newUrl);
-            Lampa.Storage.set('immich_api_key', newKey);
-            notify('Immich: настройки сохранены');
+        $('#immich-row-url').on('hover:enter click', function () {
+            editText('URL сервера Immich', getUrl(), function (value) {
+                Lampa.Storage.set('immich_url', String(value || '').trim().replace(/\/+$/, ''));
+                refreshLabels();
+            });
         });
 
+        $('#immich-row-key').on('hover:enter click', function () {
+            editText('API-ключ Immich', getKey(), function (value) {
+                Lampa.Storage.set('immich_api_key', String(value || '').trim());
+                refreshLabels();
+            });
+        });
+
+        $('#immich-btn-close').on('click hover:enter', close);
+
         $('#immich-btn-start').on('click hover:enter', function () {
-            var newUrl = ($('#immich-input-url').val() || '').trim();
-            var newKey = ($('#immich-input-key').val() || '').trim();
-            Lampa.Storage.set('immich_url', newUrl);
-            Lampa.Storage.set('immich_api_key', newKey);
             close();
             startSlideshow();
         });
-
-        // Фокус на первое поле для удобства с клавиатуры
-        setTimeout(function () { $('#immich-input-url').focus(); }, 100);
-    }
-
-    function escapeHtml(s) {
-        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
     // ---------- СЛАЙДШОУ ----------
@@ -110,7 +147,6 @@
 
         notify('Immich: загрузка фотографий...');
 
-        // Запрос случайных ассетов
         fetch(url + '/api/assets/random?count=10', {
             headers: { 'x-api-key': key, 'Accept': 'application/json' }
         })
@@ -124,7 +160,6 @@
                 notify('Immich: фотографий не найдено');
                 return;
             }
-            // Загружаем превью как blob (нужен заголовок x-api-key)
             var loads = assets.map(function (asset) {
                 var id = asset.id || asset.assetId;
                 if (!id) return Promise.resolve(null);
@@ -152,7 +187,8 @@
         })
         .then(null, function (err) {
             console.error('[Immich] fetch error:', err);
-            notify('Immich: ошибка запроса (' + (err && err.message ? err.message : 'network') + ')');
+            var msg = err && err.message ? err.message : 'network';
+            notify('Immich: ошибка запроса (' + msg + ')');
         });
     }
 
@@ -172,19 +208,12 @@
 
         nextSlide();
 
-        // Выход по Back/Return через обработчик клавиш Lampa
-        try {
-            Lampa.Keypad && Lampa.Keypad.listener && Lampa.Keypad.listener.follow('keydown', onSlideKey);
-        } catch (e) {}
-        // Резервный обработчик
         $(document).on('keydown.immich', onSlideKey);
-        // Клик по оверлею — выход
         overlay.on('click', stopSlideshow);
     }
 
     function onSlideKey(e) {
         var code = e && (e.keyCode || e.which);
-        // 8 = Backspace, 27 = Esc, 461 = Back на LG, 10009 = Return на Samsung
         if (code === 8 || code === 27 || code === 461 || code === 10009) {
             e.preventDefault && e.preventDefault();
             stopSlideshow();
@@ -193,7 +222,6 @@
 
     function nextSlide() {
         if (!slideshowState.active) return;
-
         var slide = $('#immich-slide');
         if (!slide.length) return;
 
@@ -202,7 +230,6 @@
 
         slide.css('background-image', 'url("' + url + '")');
         slide.removeClass('immich-slide-anim');
-        // Перезапуск CSS-анимации
         void slide[0].offsetWidth;
         slide.addClass('immich-slide-anim');
 
@@ -215,13 +242,11 @@
             clearTimeout(slideshowState.timer);
             slideshowState.timer = null;
         }
-        try { Lampa.Keypad && Lampa.Keypad.listener && Lampa.Keypad.listener.stopFollow('keydown', onSlideKey); } catch (e) {}
         $(document).off('keydown.immich', onSlideKey);
         if (slideshowState.overlay) {
             slideshowState.overlay.remove();
             slideshowState.overlay = null;
         }
-        // Освобождаем blob-URL
         slideshowState.urls.forEach(function (u) {
             try { URL.revokeObjectURL(u); } catch (e) {}
         });
@@ -232,11 +257,9 @@
     // ---------- ПУНКТ В ГЛАВНОМ МЕНЮ ----------
 
     function addMenuItem() {
-        // Ищем контейнер главного меню Lampa
         var menu = $('.menu__list').first();
         if (!menu.length) menu = $('.menu .list').first();
         if (!menu.length) return false;
-
         if (menu.find('.immich-menu-item').length) return true;
 
         var item = $(
@@ -244,34 +267,24 @@
                 '<div class="menu__text">Immich (v' + VERSION + ')</div>' +
             '</li>'
         );
-
-        item.on('hover:enter click', function () {
-            openSettings();
-        });
-
+        item.on('hover:enter click', openSettings);
         menu.append(item);
         console.log('[Immich] пункт меню добавлен');
         return true;
     }
 
     function watchMenu() {
-        // Пытаемся добавить сразу
         if (addMenuItem()) {
-            // Следим за перерисовкой меню, чтобы пункт не пропал
             var target = $('.menu').first();
             if (target.length && window.MutationObserver) {
-                var obs = new MutationObserver(function () { addMenuItem(); });
-                obs.observe(target[0], { childList: true, subtree: false });
+                new MutationObserver(addMenuItem).observe(target[0], { childList: true, subtree: false });
             }
             return;
         }
-        // Меню ещё не построено — ждём
         var tries = 0;
         var interval = setInterval(function () {
             tries++;
-            if (addMenuItem() || tries > 40) {
-                clearInterval(interval);
-            }
+            if (addMenuItem() || tries > 40) clearInterval(interval);
         }, 500);
     }
 
@@ -281,11 +294,14 @@
         if ($('#immich-styles').length) return;
         var css =
             '.immich-settings-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;}' +
-            '.immich-settings-box{background:#1a1a1a;color:#fff;padding:24px;border-radius:10px;width:520px;max-width:90%;font-family:sans-serif;}' +
+            '.immich-settings-box{background:#1a1a1a;color:#fff;padding:24px;border-radius:10px;width:560px;max-width:92%;font-family:sans-serif;}' +
             '.immich-settings-title{font-size:20px;margin-bottom:16px;font-weight:bold;}' +
             '.immich-settings-row{margin-bottom:14px;}' +
             '.immich-settings-row label{display:block;margin-bottom:6px;font-size:14px;color:#bbb;}' +
-            '.immich-input{width:100%;padding:10px;font-size:16px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:6px;box-sizing:border-box;}' +
+            '.immich-value-btn{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:#2a2a2a;border:1px solid #444;border-radius:6px;cursor:pointer;}' +
+            '.immich-value-btn:hover{background:#333;border-color:#666;}' +
+            '.immich-value-text{font-size:15px;word-break:break-all;max-width:75%;}' +
+            '.immich-value-edit{color:#2a6df4;font-size:13px;flex-shrink:0;}' +
             '.immich-settings-buttons{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap;}' +
             '.immich-btn{padding:10px 16px;background:#333;color:#fff;border-radius:6px;cursor:pointer;user-select:none;font-size:15px;}' +
             '.immich-btn:hover{background:#444;}' +
