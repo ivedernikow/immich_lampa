@@ -1,11 +1,12 @@
 /*
  * Immich Screensaver for Lampa
- * Version: 1.1.1
+ * Version: 1.1.2
  */
 (function () {
     'use strict';
 
-    var VERSION = '1.1.1';
+    var VERSION = '1.1.2';
+    var PROXY = 'https://test.cors.workers.dev/?';
 
     if (window.immichScreensaverLoaded) return;
     window.immichScreensaverLoaded = true;
@@ -27,11 +28,28 @@
             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    // ---------- ПРЯМОЙ ВВОД (физическая клавиатура) ----------
+    // Запрос с автоматическим fallback на CORS-прокси
+    // Возвращает Promise<Response>
+    function requestWithFallback(url, headers, tag) {
+        function direct() {
+            console.log('[Immich][' + tag + '] direct fetch:', url);
+            return fetch(url, { method: 'GET', headers: headers, mode: 'cors', credentials: 'omit' });
+        }
+        function viaProxy() {
+            var proxied = PROXY + encodeURIComponent(url);
+            console.log('[Immich][' + tag + '] proxy fetch:', proxied);
+            return fetch(proxied, { method: 'GET', headers: headers, credentials: 'omit' });
+        }
+        return direct().then(null, function (e) {
+            console.warn('[Immich][' + tag + '] direct failed:', e && e.message);
+            return viaProxy();
+        });
+    }
+
+    // ---------- ВВОД ТЕКСТА ----------
 
     function editTextDirect(title, currentValue, onDone) {
         if ($('.immich-input-modal').length) return;
-
         var html =
             '<div class="immich-settings-overlay immich-input-modal">' +
                 '<div class="immich-settings-box">' +
@@ -44,33 +62,21 @@
                     '<div class="immich-settings-hint">Введите текст с клавиатуры. Enter — сохранить, Esc — отмена.</div>' +
                 '</div>' +
             '</div>';
-
         $('body').append(html);
         var $input = $('.immich-direct-field');
 
-        function doSave() {
-            var v = $input.val();
-            $('.immich-input-modal').remove();
-            onDone(v);
-        }
-        function doCancel() {
-            $('.immich-input-modal').remove();
-        }
+        function doSave() { var v = $input.val(); $('.immich-input-modal').remove(); onDone(v); }
+        function doCancel() { $('.immich-input-modal').remove(); }
 
-        // Несколько попыток фокуса — некоторые TV/браузеры «теряют» его при открытии модалки
         [50, 200, 500, 1000, 2000].forEach(function (d) {
             setTimeout(function () {
                 if ($input.length && $input.is(':visible')) {
                     try { $input[0].focus(); } catch (e) {}
-                    try {
-                        var len = $input.val().length;
-                        $input[0].setSelectionRange(len, len);
-                    } catch (e) {}
+                    try { var len = $input.val().length; $input[0].setSelectionRange(len, len); } catch (e) {}
                 }
             }, d);
         });
 
-        // Ключевой момент: глушим события, чтобы Lampa не забирала их себе
         $input.on('keydown keypress keyup', function (e) {
             e.stopPropagation();
             if (e.type === 'keydown') {
@@ -87,7 +93,6 @@
 
     function openSettings() {
         if ($('.immich-settings-overlay:not(.immich-input-modal)').length) return;
-
         var html =
             '<div class="immich-settings-overlay">' +
                 '<div class="immich-settings-box">' +
@@ -110,31 +115,30 @@
                         '<div class="immich-btn immich-btn-primary" id="immich-btn-start">Запустить показ</div>' +
                         '<div class="immich-btn" id="immich-btn-close">Закрыть</div>' +
                     '</div>' +
-                    '<div class="immich-settings-hint">Нажмите OK на строке, чтобы ввести значение.</div>' +
+                    '<div class="immich-settings-hint">При блокировке CORS запрос пойдёт через публичный прокси test.cors.workers.dev. API-ключ будет передан через этот прокси.</div>' +
                 '</div>' +
             '</div>';
-
         $('body').append(html);
 
-        function refreshLabels() {
-            var u = getUrl(), k = getKey();
-            $('#immich-value-url').text(u || '— не задан —');
+        function refresh() {
+            $('#immich-value-url').text(getUrl() || '— не задан —');
+            var k = getKey();
             $('#immich-value-key').text(k ? ('••••' + k.slice(-4)) : '— не задан —');
         }
-        refreshLabels();
+        refresh();
 
         function close() { $('.immich-settings-overlay:not(.immich-input-modal)').remove(); }
 
         $('#immich-row-url').on('hover:enter click', function () {
             editTextDirect('URL сервера Immich', getUrl(), function (v) {
                 Lampa.Storage.set('immich_url', String(v || '').trim().replace(/\/+$/, ''));
-                refreshLabels();
+                refresh();
             });
         });
         $('#immich-row-key').on('hover:enter click', function () {
             editTextDirect('API-ключ Immich', getKey(), function (v) {
                 Lampa.Storage.set('immich_api_key', String(v || '').trim());
-                refreshLabels();
+                refresh();
             });
         });
 
@@ -153,83 +157,53 @@
         if (!url) { notify('Immich: URL не задан'); openSettings(); return; }
         if (!key) { notify('Immich: API-ключ не задан'); openSettings(); return; }
 
-        // Проверка протокола: HTTPS-страница не может грузить HTTP
-        if (location.protocol === 'https:' && url.indexOf('http://') === 0) {
-            notify('Immich: HTTPS-страница не может запрашивать HTTP. Нужен HTTPS-адрес Immich.');
-            return;
-        }
-
         var endpoint = url + '/api/assets/random?count=10';
-        console.log('[Immich] fetch:', endpoint);
-        notify('Immich: запрос к серверу...');
+        var headers = { 'x-api-key': key, 'Accept': 'application/json' };
 
-        var p;
-        try {
-            p = fetch(endpoint, {
-                method: 'GET',
-                headers: { 'x-api-key': key, 'Accept': 'application/json' },
-                mode: 'cors',
-                credentials: 'omit'
-            });
-        } catch (e) {
-            console.error('[Immich] fetch sync error:', e);
-            notify('Immich: fetch не удался: ' + (e && e.message ? e.message : e));
-            return;
-        }
+        notify('Immich: запрос списка фото...');
 
-        p.then(function (r) {
-            console.log('[Immich] status:', r.status, r.statusText, 'type:', r.type);
+        requestWithFallback(endpoint, headers, 'list')
+        .then(function (r) {
+            console.log('[Immich][list] status:', r.status, 'type:', r.type);
             if (!r.ok) {
                 return r.text().then(function (t) {
-                    console.error('[Immich] HTTP error body:', (t || '').slice(0, 500));
-                    throw new Error('HTTP ' + r.status + ' — ' + (t || '').slice(0, 100));
+                    throw new Error('HTTP ' + r.status + ' — ' + (t || '').slice(0, 120));
                 });
             }
             return r.json();
         })
         .then(function (data) {
-            console.log('[Immich] data:', data);
             var assets = Array.isArray(data) ? data
                 : (data && (data.assets || data.items || data.results)) || [];
             console.log('[Immich] assets count:', assets.length);
-            if (!assets.length) {
-                notify('Immich: сервер вернул пустой список');
-                return;
-            }
+            if (!assets.length) { notify('Immich: пустой список'); return; }
 
             var loads = assets.map(function (a) {
                 var id = a.id || a.assetId;
                 if (!id) return Promise.resolve(null);
-                return fetch(url + '/api/assets/' + id + '/thumbnail?size=preview', {
-                    headers: { 'x-api-key': key }
-                })
-                .then(function (r2) {
-                    if (!r2.ok) { console.warn('[Immich] thumb status', r2.status); return null; }
-                    return r2.blob();
-                })
-                .then(function (blob) {
-                    if (!blob) return null;
-                    try { return URL.createObjectURL(blob); } catch (e) { return null; }
-                })
-                .then(null, function (e) { console.warn('[Immich] thumb err', e); return null; });
+                var thumbUrl = url + '/api/assets/' + id + '/thumbnail?size=preview';
+                return requestWithFallback(thumbUrl, { 'x-api-key': key }, 'thumb')
+                    .then(function (r2) {
+                        if (!r2.ok) { console.warn('[Immich][thumb] status', r2.status); return null; }
+                        return r2.blob();
+                    })
+                    .then(function (blob) {
+                        if (!blob) return null;
+                        try { return URL.createObjectURL(blob); } catch (e) { return null; }
+                    })
+                    .then(null, function (e) { console.warn('[Immich][thumb] err', e && e.message); return null; });
             });
 
             return Promise.all(loads).then(function (urls) {
                 var valid = urls.filter(function (u) { return !!u; });
                 console.log('[Immich] valid thumbs:', valid.length);
-                if (!valid.length) { notify('Immich: не удалось загрузить превью'); return; }
+                if (!valid.length) { notify('Immich: превью не загрузились'); return; }
                 showSlideshow(valid);
             });
         })
         .then(null, function (err) {
-            var msg = 'unknown';
-            if (err) {
-                if (typeof err === 'string') msg = err;
-                else if (err.message) msg = err.message;
-                else if (err.name) msg = err.name;
-                else { try { msg = JSON.stringify(err); } catch (e) {} }
-            }
-            console.error('[Immich] error:', msg, err);
+            var msg = err && err.message ? err.message : String(err);
+            console.error('[Immich] error:', msg);
             notify('Immich: ' + msg);
         });
     }
@@ -326,7 +300,7 @@
             '.immich-btn:hover{background:#444;}' +
             '.immich-btn-primary{background:#2a6df4;}' +
             '.immich-btn-primary:hover{background:#3a7dff;}' +
-            '.immich-settings-hint{margin-top:14px;font-size:12px;color:#888;}' +
+            '.immich-settings-hint{margin-top:14px;font-size:12px;color:#888;line-height:1.4;}' +
             '.immich-slideshow-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:#000;z-index:99998;overflow:hidden;}' +
             '.immich-slide{position:absolute;top:0;left:0;right:0;bottom:0;background-size:cover;background-position:center;background-repeat:no-repeat;opacity:0;transform:scale(1);transition:opacity 1.2s ease;}' +
             '.immich-slide-anim{opacity:1;animation:immich-zoom 8s linear forwards;}' +
@@ -334,8 +308,6 @@
             '.immich-slideshow-hint{position:absolute;bottom:20px;right:20px;color:#fff;opacity:0.5;font-family:sans-serif;font-size:14px;}';
         $('head').append('<style id="immich-styles">' + css + '</style>');
     }
-
-    // ---------- ИНИЦИАЛИЗАЦИЯ ----------
 
     function init() {
         console.log('[Immich] init v' + VERSION);
