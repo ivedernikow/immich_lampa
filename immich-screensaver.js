@@ -1,11 +1,11 @@
 /*
  * Immich Screensaver for Lampa
- * Version: 1.1.0
+ * Version: 1.1.1
  */
 (function () {
     'use strict';
 
-    var VERSION = '1.1.0';
+    var VERSION = '1.1.1';
 
     if (window.immichScreensaverLoaded) return;
     window.immichScreensaverLoaded = true;
@@ -15,55 +15,83 @@
     function getUrl() {
         return (Lampa.Storage.get('immich_url', '') || '').replace(/\/+$/, '');
     }
-
     function getKey() {
         return Lampa.Storage.get('immich_api_key', '') || '';
     }
-
     function notify(msg) {
         try { Lampa.Noty.show(msg); } catch (e) { console.log('[Immich]', msg); }
     }
-
     function escapeHtml(s) {
         return String(s == null ? '' : s)
             .replace(/&/g, '&amp;').replace(/</g, '&lt;')
             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    // Универсальная обёртка над штатной клавиатурой Lampa
-    function editText(title, currentValue, onDone) {
-        var opts = {
-            title: title,
-            value: currentValue || '',
-            free: true,
-            nosave: true,
-            onSave: function (value) { onDone(value); },
-            onCancel: function () {}
-        };
-        try {
-            var res = Lampa.Input.edit(opts);
-            // В новых версиях Lampa Input.edit возвращает Promise
-            if (res && typeof res.then === 'function') {
-                res.then(function (value) {
-                    if (value !== undefined && value !== null) onDone(value);
-                }).then(null, function () {});
-            }
-        } catch (e) {
-            console.error('[Immich] Input.edit error:', e);
-            notify('Immich: не удалось открыть клавиатуру');
+    // ---------- ПРЯМОЙ ВВОД (физическая клавиатура) ----------
+
+    function editTextDirect(title, currentValue, onDone) {
+        if ($('.immich-input-modal').length) return;
+
+        var html =
+            '<div class="immich-settings-overlay immich-input-modal">' +
+                '<div class="immich-settings-box">' +
+                    '<div class="immich-settings-title">' + escapeHtml(title) + '</div>' +
+                    '<input type="text" class="immich-direct-field" value="' + escapeHtml(currentValue || '') + '">' +
+                    '<div class="immich-settings-buttons">' +
+                        '<div class="immich-btn immich-btn-primary" id="immich-direct-ok">Сохранить</div>' +
+                        '<div class="immich-btn" id="immich-direct-cancel">Отмена</div>' +
+                    '</div>' +
+                    '<div class="immich-settings-hint">Введите текст с клавиатуры. Enter — сохранить, Esc — отмена.</div>' +
+                '</div>' +
+            '</div>';
+
+        $('body').append(html);
+        var $input = $('.immich-direct-field');
+
+        function doSave() {
+            var v = $input.val();
+            $('.immich-input-modal').remove();
+            onDone(v);
         }
+        function doCancel() {
+            $('.immich-input-modal').remove();
+        }
+
+        // Несколько попыток фокуса — некоторые TV/браузеры «теряют» его при открытии модалки
+        [50, 200, 500, 1000, 2000].forEach(function (d) {
+            setTimeout(function () {
+                if ($input.length && $input.is(':visible')) {
+                    try { $input[0].focus(); } catch (e) {}
+                    try {
+                        var len = $input.val().length;
+                        $input[0].setSelectionRange(len, len);
+                    } catch (e) {}
+                }
+            }, d);
+        });
+
+        // Ключевой момент: глушим события, чтобы Lampa не забирала их себе
+        $input.on('keydown keypress keyup', function (e) {
+            e.stopPropagation();
+            if (e.type === 'keydown') {
+                if (e.keyCode === 13) { e.preventDefault(); doSave(); }
+                if (e.keyCode === 27) { e.preventDefault(); doCancel(); }
+            }
+        });
+
+        $('#immich-direct-ok').on('click hover:enter', doSave);
+        $('#immich-direct-cancel').on('click hover:enter', doCancel);
     }
 
     // ---------- ОКНО НАСТРОЕК ----------
 
     function openSettings() {
-        if ($('.immich-settings-overlay').length) return;
+        if ($('.immich-settings-overlay:not(.immich-input-modal)').length) return;
 
         var html =
             '<div class="immich-settings-overlay">' +
                 '<div class="immich-settings-box">' +
                     '<div class="immich-settings-title">Immich — настройки (v' + VERSION + ')</div>' +
-
                     '<div class="immich-settings-row">' +
                         '<label>URL сервера</label>' +
                         '<div class="immich-value-btn" id="immich-row-url">' +
@@ -71,7 +99,6 @@
                             '<span class="immich-value-edit">Изменить</span>' +
                         '</div>' +
                     '</div>' +
-
                     '<div class="immich-settings-row">' +
                         '<label>API-ключ</label>' +
                         '<div class="immich-value-btn" id="immich-row-key">' +
@@ -79,124 +106,136 @@
                             '<span class="immich-value-edit">Изменить</span>' +
                         '</div>' +
                     '</div>' +
-
                     '<div class="immich-settings-buttons">' +
                         '<div class="immich-btn immich-btn-primary" id="immich-btn-start">Запустить показ</div>' +
                         '<div class="immich-btn" id="immich-btn-close">Закрыть</div>' +
                     '</div>' +
-
-                    '<div class="immich-settings-hint">Нажмите OK на строке, чтобы открыть клавиатуру Lampa.</div>' +
+                    '<div class="immich-settings-hint">Нажмите OK на строке, чтобы ввести значение.</div>' +
                 '</div>' +
             '</div>';
 
         $('body').append(html);
 
         function refreshLabels() {
-            var u = getUrl();
-            var k = getKey();
+            var u = getUrl(), k = getKey();
             $('#immich-value-url').text(u || '— не задан —');
             $('#immich-value-key').text(k ? ('••••' + k.slice(-4)) : '— не задан —');
         }
         refreshLabels();
 
-        function close() {
-            $('.immich-settings-overlay').remove();
-        }
+        function close() { $('.immich-settings-overlay:not(.immich-input-modal)').remove(); }
 
         $('#immich-row-url').on('hover:enter click', function () {
-            editText('URL сервера Immich', getUrl(), function (value) {
-                Lampa.Storage.set('immich_url', String(value || '').trim().replace(/\/+$/, ''));
+            editTextDirect('URL сервера Immich', getUrl(), function (v) {
+                Lampa.Storage.set('immich_url', String(v || '').trim().replace(/\/+$/, ''));
                 refreshLabels();
             });
         });
-
         $('#immich-row-key').on('hover:enter click', function () {
-            editText('API-ключ Immich', getKey(), function (value) {
-                Lampa.Storage.set('immich_api_key', String(value || '').trim());
+            editTextDirect('API-ключ Immich', getKey(), function (v) {
+                Lampa.Storage.set('immich_api_key', String(v || '').trim());
                 refreshLabels();
             });
         });
 
         $('#immich-btn-close').on('click hover:enter', close);
-
-        $('#immich-btn-start').on('click hover:enter', function () {
-            close();
-            startSlideshow();
-        });
+        $('#immich-btn-start').on('click hover:enter', function () { close(); startSlideshow(); });
     }
 
     // ---------- СЛАЙДШОУ ----------
 
-    var slideshowState = {
-        active: false,
-        timer: null,
-        urls: [],
-        index: 0,
-        overlay: null
-    };
+    var st = { active: false, timer: null, urls: [], index: 0, overlay: null };
 
     function startSlideshow() {
         var url = getUrl();
         var key = getKey();
 
-        if (!url || !key) {
-            notify('Immich: сначала задайте URL и API-ключ');
-            openSettings();
+        if (!url) { notify('Immich: URL не задан'); openSettings(); return; }
+        if (!key) { notify('Immich: API-ключ не задан'); openSettings(); return; }
+
+        // Проверка протокола: HTTPS-страница не может грузить HTTP
+        if (location.protocol === 'https:' && url.indexOf('http://') === 0) {
+            notify('Immich: HTTPS-страница не может запрашивать HTTP. Нужен HTTPS-адрес Immich.');
             return;
         }
 
-        notify('Immich: загрузка фотографий...');
+        var endpoint = url + '/api/assets/random?count=10';
+        console.log('[Immich] fetch:', endpoint);
+        notify('Immich: запрос к серверу...');
 
-        fetch(url + '/api/assets/random?count=10', {
-            headers: { 'x-api-key': key, 'Accept': 'application/json' }
-        })
-        .then(function (r) {
-            if (!r.ok) throw new Error('HTTP ' + r.status);
+        var p;
+        try {
+            p = fetch(endpoint, {
+                method: 'GET',
+                headers: { 'x-api-key': key, 'Accept': 'application/json' },
+                mode: 'cors',
+                credentials: 'omit'
+            });
+        } catch (e) {
+            console.error('[Immich] fetch sync error:', e);
+            notify('Immich: fetch не удался: ' + (e && e.message ? e.message : e));
+            return;
+        }
+
+        p.then(function (r) {
+            console.log('[Immich] status:', r.status, r.statusText, 'type:', r.type);
+            if (!r.ok) {
+                return r.text().then(function (t) {
+                    console.error('[Immich] HTTP error body:', (t || '').slice(0, 500));
+                    throw new Error('HTTP ' + r.status + ' — ' + (t || '').slice(0, 100));
+                });
+            }
             return r.json();
         })
         .then(function (data) {
-            var assets = Array.isArray(data) ? data : (data && data.assets) || [];
+            console.log('[Immich] data:', data);
+            var assets = Array.isArray(data) ? data
+                : (data && (data.assets || data.items || data.results)) || [];
+            console.log('[Immich] assets count:', assets.length);
             if (!assets.length) {
-                notify('Immich: фотографий не найдено');
+                notify('Immich: сервер вернул пустой список');
                 return;
             }
-            var loads = assets.map(function (asset) {
-                var id = asset.id || asset.assetId;
+
+            var loads = assets.map(function (a) {
+                var id = a.id || a.assetId;
                 if (!id) return Promise.resolve(null);
                 return fetch(url + '/api/assets/' + id + '/thumbnail?size=preview', {
                     headers: { 'x-api-key': key }
                 })
-                .then(function (r) {
-                    if (!r.ok) return null;
-                    return r.blob();
+                .then(function (r2) {
+                    if (!r2.ok) { console.warn('[Immich] thumb status', r2.status); return null; }
+                    return r2.blob();
                 })
                 .then(function (blob) {
-                    return blob ? URL.createObjectURL(blob) : null;
+                    if (!blob) return null;
+                    try { return URL.createObjectURL(blob); } catch (e) { return null; }
                 })
-                .then(null, function () { return null; });
+                .then(null, function (e) { console.warn('[Immich] thumb err', e); return null; });
             });
 
             return Promise.all(loads).then(function (urls) {
                 var valid = urls.filter(function (u) { return !!u; });
-                if (!valid.length) {
-                    notify('Immich: не удалось загрузить изображения');
-                    return;
-                }
+                console.log('[Immich] valid thumbs:', valid.length);
+                if (!valid.length) { notify('Immich: не удалось загрузить превью'); return; }
                 showSlideshow(valid);
             });
         })
         .then(null, function (err) {
-            console.error('[Immich] fetch error:', err);
-            var msg = err && err.message ? err.message : 'network';
-            notify('Immich: ошибка запроса (' + msg + ')');
+            var msg = 'unknown';
+            if (err) {
+                if (typeof err === 'string') msg = err;
+                else if (err.message) msg = err.message;
+                else if (err.name) msg = err.name;
+                else { try { msg = JSON.stringify(err); } catch (e) {} }
+            }
+            console.error('[Immich] error:', msg, err);
+            notify('Immich: ' + msg);
         });
     }
 
     function showSlideshow(urls) {
-        slideshowState.urls = urls;
-        slideshowState.index = 0;
-        slideshowState.active = true;
-
+        st.urls = urls; st.index = 0; st.active = true;
         var overlay = $(
             '<div class="immich-slideshow-overlay">' +
                 '<div class="immich-slide" id="immich-slide"></div>' +
@@ -204,14 +243,11 @@
             '</div>'
         );
         $('body').append(overlay);
-        slideshowState.overlay = overlay;
-
+        st.overlay = overlay;
         nextSlide();
-
         $(document).on('keydown.immich', onSlideKey);
         overlay.on('click', stopSlideshow);
     }
-
     function onSlideKey(e) {
         var code = e && (e.keyCode || e.which);
         if (code === 8 || code === 27 || code === 461 || code === 10009) {
@@ -219,49 +255,35 @@
             stopSlideshow();
         }
     }
-
     function nextSlide() {
-        if (!slideshowState.active) return;
+        if (!st.active) return;
         var slide = $('#immich-slide');
         if (!slide.length) return;
-
-        var url = slideshowState.urls[slideshowState.index];
-        slideshowState.index = (slideshowState.index + 1) % slideshowState.urls.length;
-
+        var url = st.urls[st.index];
+        st.index = (st.index + 1) % st.urls.length;
         slide.css('background-image', 'url("' + url + '")');
         slide.removeClass('immich-slide-anim');
         void slide[0].offsetWidth;
         slide.addClass('immich-slide-anim');
-
-        slideshowState.timer = setTimeout(nextSlide, 8000);
+        st.timer = setTimeout(nextSlide, 8000);
     }
-
     function stopSlideshow() {
-        slideshowState.active = false;
-        if (slideshowState.timer) {
-            clearTimeout(slideshowState.timer);
-            slideshowState.timer = null;
-        }
+        st.active = false;
+        if (st.timer) { clearTimeout(st.timer); st.timer = null; }
         $(document).off('keydown.immich', onSlideKey);
-        if (slideshowState.overlay) {
-            slideshowState.overlay.remove();
-            slideshowState.overlay = null;
-        }
-        slideshowState.urls.forEach(function (u) {
-            try { URL.revokeObjectURL(u); } catch (e) {}
-        });
-        slideshowState.urls = [];
+        if (st.overlay) { st.overlay.remove(); st.overlay = null; }
+        st.urls.forEach(function (u) { try { URL.revokeObjectURL(u); } catch (e) {} });
+        st.urls = [];
         notify('Immich: показ остановлен');
     }
 
-    // ---------- ПУНКТ В ГЛАВНОМ МЕНЮ ----------
+    // ---------- ПУНКТ МЕНЮ ----------
 
     function addMenuItem() {
         var menu = $('.menu__list').first();
         if (!menu.length) menu = $('.menu .list').first();
         if (!menu.length) return false;
         if (menu.find('.immich-menu-item').length) return true;
-
         var item = $(
             '<li class="menu__item selector immich-menu-item">' +
                 '<div class="menu__text">Immich (v' + VERSION + ')</div>' +
@@ -269,23 +291,18 @@
         );
         item.on('hover:enter click', openSettings);
         menu.append(item);
-        console.log('[Immich] пункт меню добавлен');
         return true;
     }
-
     function watchMenu() {
         if (addMenuItem()) {
-            var target = $('.menu').first();
-            if (target.length && window.MutationObserver) {
-                new MutationObserver(addMenuItem).observe(target[0], { childList: true, subtree: false });
+            var t = $('.menu').first();
+            if (t.length && window.MutationObserver) {
+                new MutationObserver(addMenuItem).observe(t[0], { childList: true, subtree: false });
             }
             return;
         }
         var tries = 0;
-        var interval = setInterval(function () {
-            tries++;
-            if (addMenuItem() || tries > 40) clearInterval(interval);
-        }, 500);
+        var iv = setInterval(function () { tries++; if (addMenuItem() || tries > 40) clearInterval(iv); }, 500);
     }
 
     // ---------- СТИЛИ ----------
@@ -302,6 +319,8 @@
             '.immich-value-btn:hover{background:#333;border-color:#666;}' +
             '.immich-value-text{font-size:15px;word-break:break-all;max-width:75%;}' +
             '.immich-value-edit{color:#2a6df4;font-size:13px;flex-shrink:0;}' +
+            '.immich-direct-field{width:100%;padding:12px 14px;font-size:18px;background:#2a2a2a;border:2px solid #2a6df4;color:#fff;border-radius:6px;box-sizing:border-box;outline:none;}' +
+            '.immich-direct-field:focus{border-color:#4a8dff;box-shadow:0 0 0 2px rgba(74,141,255,0.3);}' +
             '.immich-settings-buttons{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap;}' +
             '.immich-btn{padding:10px 16px;background:#333;color:#fff;border-radius:6px;cursor:pointer;user-select:none;font-size:15px;}' +
             '.immich-btn:hover{background:#444;}' +
@@ -323,12 +342,6 @@
         injectStyles();
         watchMenu();
     }
-
-    if (window.appready) {
-        init();
-    } else {
-        Lampa.Listener.follow('app', function (event) {
-            if (event.type === 'ready') init();
-        });
-    }
+    if (window.appready) init();
+    else Lampa.Listener.follow('app', function (e) { if (e.type === 'ready') init(); });
 })();
