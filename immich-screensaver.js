@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    // Защита от повторной загрузки плагина
+    // Защита  от повторной загрузки плагина
     if (window.immichScreensaverLoaded) return;
     window.immichScreensaverLoaded = true;
 
