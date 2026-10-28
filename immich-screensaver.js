@@ -23,7 +23,7 @@
             },
             field: {
                 name: 'Immich URL',
-                description: 'Базовый адрес сервера Immich'
+                description: 'Базовый адрес  сервера Immich'
             }
         });
 
